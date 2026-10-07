@@ -1,0 +1,487 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Aether DTS - Distributed Task Scheduler Dashboard</title>
+  <meta name="description" content="High-performance distributed task scheduler with cron scheduling, worker leasing, retries, idempotency, dead-letter queue, and crash recovery.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <!-- Header Bar -->
+  <header class="navbar">
+    <div class="nav-brand">
+      <div class="logo-mark">
+        <svg viewBox="0 0 24 24" width="22" height="22" stroke="currentColor" stroke-width="2.2" fill="none" stroke-linecap="round" stroke-linejoin="round">
+          <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon>
+        </svg>
+      </div>
+      <div class="brand-text">
+        <h1 class="brand-title">AETHER <span class="gradient-text">DTS</span></h1>
+        <span class="brand-subtitle">Distributed Task Scheduler &bull; 5K+ Jobs/Sec Engine</span>
+      </div>
+    </div>
+
+    <div class="cluster-status-pill" id="clusterStatusPill">
+      <span class="status-dot pulsing"></span>
+      <span class="status-label" id="clusterStatusText">CLUSTER ONLINE</span>
+      <span class="sse-indicator" id="sseIndicator" title="SSE Stream Connected">LIVE</span>
+    </div>
+
+    <div class="header-actions">
+      <button class="btn btn-secondary btn-sm" id="btnQuickBench" title="Submit 5,000 rapid jobs">
+        <svg viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" stroke-width="2" fill="none"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg>
+        <span>Quick Bench (5K)</span>
+      </button>
+      <button class="btn btn-danger btn-sm" id="btnQuickChaos" title="Simulate worker crash and lease recovery">
+        <svg viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" stroke-width="2" fill="none"><circle cx="12" cy="12" r="10"/><line x1="4.93" y1="4.93" x2="19.07" y2="19.07"/></svg>
+        <span>Inject Chaos</span>
+      </button>
+      <button class="btn btn-primary btn-sm" id="btnOpenSubmitModal">
+        <svg viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" stroke-width="2" fill="none"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+        <span>Dispatch Job</span>
+      </button>
+    </div>
+  </header>
+
+  <main class="dashboard-container">
+    <!-- Key Metrics Grid -->
+    <section class="metrics-grid" aria-label="System Metrics">
+      <!-- Throughput -->
+      <div class="metric-card glow-cyan">
+        <div class="metric-header">
+          <span class="metric-label">THROUGHPUT</span>
+          <span class="metric-badge badge-cyan">Real-time</span>
+        </div>
+        <div class="metric-value-row">
+          <span class="metric-value" id="valThroughput">0</span>
+          <span class="metric-unit">jobs/sec</span>
+        </div>
+        <div class="metric-subtext">Peak target: &ge; 5,000 jps</div>
+        <div class="throughput-bar-container">
+          <div class="throughput-bar" id="throughputBar" style="width: 0%"></div>
+        </div>
+      </div>
+
+      <!-- Total Processed -->
+      <div class="metric-card glow-emerald">
+        <div class="metric-header">
+          <span class="metric-label">COMPLETED JOBS</span>
+          <span class="metric-badge badge-emerald">100% Guaranteed</span>
+        </div>
+        <div class="metric-value-row">
+          <span class="metric-value" id="valCompleted">0</span>
+        </div>
+        <div class="metric-subtext"><span id="valSubmitted">0</span> submitted &bull; 0 lost</div>
+      </div>
+
+      <!-- Active Leases & In Flight -->
+      <div class="metric-card glow-violet">
+        <div class="metric-header">
+          <span class="metric-label">IN-FLIGHT LEASES</span>
+          <span class="metric-badge badge-violet">Visibility Timeout</span>
+        </div>
+        <div class="metric-value-row">
+          <span class="metric-value" id="valInFlight">0</span>
+          <span class="metric-unit">active</span>
+        </div>
+        <div class="metric-subtext">Auto-renewing or crash-reaped</div>
+      </div>
+
+      <!-- Pending Queue Depth -->
+      <div class="metric-card glow-amber">
+        <div class="metric-header">
+          <span class="metric-label">QUEUE DEPTH</span>
+          <span class="metric-badge badge-amber">Priority Heap</span>
+        </div>
+        <div class="metric-value-row">
+          <span class="metric-value" id="valPending">0</span>
+          <span class="metric-unit">ready</span>
+        </div>
+        <div class="metric-subtext">P0 Critical &gt; P1 High &gt; P2 &gt; P3</div>
+      </div>
+
+      <!-- Dead Letter Queue -->
+      <div class="metric-card glow-rose">
+        <div class="metric-header">
+          <span class="metric-label">DEAD LETTER QUEUE</span>
+          <span class="metric-badge badge-rose" id="dlqBadge">Quarantine</span>
+        </div>
+        <div class="metric-value-row">
+          <span class="metric-value" id="valDLQ">0</span>
+          <span class="metric-unit">failed</span>
+        </div>
+        <div class="metric-subtext"><span id="valRetried">0</span> retries with backoff</div>
+      </div>
+
+      <!-- Latency Percentiles -->
+      <div class="metric-card glow-blue">
+        <div class="metric-header">
+          <span class="metric-label">LATENCY PERCENTILES</span>
+          <span class="metric-badge badge-blue">Sampling</span>
+        </div>
+        <div class="latency-row">
+          <div class="lat-item"><span class="lat-tag">p50</span> <span class="lat-val" id="valP50">0ms</span></div>
+          <div class="lat-item"><span class="lat-tag">p95</span> <span class="lat-val" id="valP95">0ms</span></div>
+          <div class="lat-item"><span class="lat-tag">p99</span> <span class="lat-val" id="valP99">0ms</span></div>
+        </div>
+        <div class="metric-subtext">Microsecond execution overhead</div>
+      </div>
+    </section>
+
+    <!-- Navigation Tabs -->
+    <nav class="nav-tabs" aria-label="Dashboard Sections">
+      <button class="tab-btn active" data-tab="tab-workers" id="tabBtnWorkers">
+        <svg viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" stroke-width="2" fill="none"><rect x="2" y="2" width="20" height="8" rx="2" ry="2"/><rect x="2" y="14" width="20" height="8" rx="2" ry="2"/><line x1="6" y1="6" x2="6.01" y2="6"/><line x1="6" y1="18" x2="6.01" y2="18"/></svg>
+        <span>Worker Fleet</span>
+        <span class="tab-count" id="tabWorkerCount">0</span>
+      </button>
+
+      <button class="tab-btn" data-tab="tab-dispatcher" id="tabBtnDispatcher">
+        <svg viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" stroke-width="2" fill="none"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="12" y1="18" x2="12" y2="12"/><line x1="9" y1="15" x2="15" y2="15"/></svg>
+        <span>Job Dispatcher &amp; Cron</span>
+      </button>
+
+      <button class="tab-btn" data-tab="tab-jobs" id="tabBtnJobs">
+        <svg viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" stroke-width="2" fill="none"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>
+        <span>Live Job Stream</span>
+      </button>
+
+      <button class="tab-btn" data-tab="tab-dlq" id="tabBtnDLQ">
+        <svg viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" stroke-width="2" fill="none"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>
+        <span>Dead-Letter Queue</span>
+        <span class="tab-count badge-rose-subtle" id="tabDLQCount">0</span>
+      </button>
+
+      <button class="tab-btn" data-tab="tab-benchmarks" id="tabBtnBenchmarks">
+        <svg viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" stroke-width="2" fill="none"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
+        <span>100K Benchmark &amp; Chaos Suite</span>
+      </button>
+    </nav>
+
+    <!-- TAB 1: WORKER FLEET -->
+    <section class="tab-content active" id="tab-workers">
+      <div class="section-toolbar">
+        <div class="toolbar-title-group">
+          <h2 class="section-title">Distributed Worker Nodes</h2>
+          <p class="section-desc">Real-time heartbeat monitoring, concurrency utilization, visibility timeouts, and chaos fault injection.</p>
+        </div>
+        <div class="toolbar-actions">
+          <span class="worker-summary" id="workerFleetSummary">0 Healthy / 0 Dead</span>
+        </div>
+      </div>
+
+      <div class="workers-grid" id="workersGrid">
+        <!-- Rendered dynamically -->
+      </div>
+    </section>
+
+    <!-- TAB 2: DISPATCHER & CRON -->
+    <section class="tab-content" id="tab-dispatcher">
+      <div class="section-toolbar">
+        <div class="toolbar-title-group">
+          <h2 class="section-title">Job Dispatcher &amp; Cron Scheduler</h2>
+          <p class="section-desc">Submit jobs with cron timing, priority levels (P0-P3), idempotency keys, and exponential backoff retries.</p>
+        </div>
+      </div>
+
+      <div class="dispatcher-layout">
+        <form class="glass-form" id="jobDispatchForm">
+          <div class="form-row two-col">
+            <div class="form-group">
+              <label for="inputJobName">Task Handler</label>
+              <select id="inputJobName" class="form-control">
+                <option value="default">default (Standard Fast IO / Compute)</option>
+                <option value="benchmark">benchmark (Ultra-fast microtask for 5K+ JPS)</option>
+                <option value="flaky">flaky (Fails 2x &rarr; Exponential Backoff Test)</option>
+                <option value="fail_dlq">fail_dlq (Permanently Fails &rarr; Routes to DLQ)</option>
+                <option value="long_running">long_running (Tests visibility lease renewal)</option>
+              </select>
+            </div>
+
+            <div class="form-group">
+              <label for="inputPriority">Priority Level</label>
+              <select id="inputPriority" class="form-control">
+                <option value="0">P0 - Critical (Immediate Dispatch)</option>
+                <option value="1">P1 - High Urgency</option>
+                <option value="2" selected>P2 - Normal</option>
+                <option value="3">P3 - Low Background</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="form-row two-col">
+            <div class="form-group">
+              <label for="inputCron">Cron Schedule <span class="label-hint">(Optional, e.g. @every 5s or */10 * * * * *)</span></label>
+              <div class="input-with-button">
+                <input type="text" id="inputCron" class="form-control" placeholder="e.g. */5 * * * * * (Every 5 seconds)">
+              </div>
+              <div class="cron-presets">
+                <button type="button" class="preset-chip" data-cron="*/5 * * * * *">Every 5s</button>
+                <button type="button" class="preset-chip" data-cron="@every 10s">@every 10s</button>
+                <button type="button" class="preset-chip" data-cron="@hourly">Hourly</button>
+                <button type="button" class="preset-chip" data-cron="@daily">Daily</button>
+                <button type="button" class="preset-chip" data-cron="">Clear</button>
+              </div>
+            </div>
+
+            <div class="form-group">
+              <label for="inputIdempotencyKey">
+                Idempotency Key
+                <span class="label-hint">(Guarantees exactly-once effects)</span>
+              </label>
+              <div class="input-with-button">
+                <input type="text" id="inputIdempotencyKey" class="form-control font-mono" placeholder="e.g. order-payment-9941">
+                <button type="button" class="btn btn-secondary btn-sm" id="btnGenUUID" title="Generate UUID">Gen UUID</button>
+              </div>
+              <span class="form-tip">Submitting identical keys returns existing job without duplicate execution.</span>
+            </div>
+          </div>
+
+          <div class="form-row three-col">
+            <div class="form-group">
+              <label for="inputMaxRetries">Max Retries</label>
+              <input type="number" id="inputMaxRetries" class="form-control" value="3" min="0" max="10">
+            </div>
+            <div class="form-group">
+              <label for="inputBaseBackoff">Base Backoff (ms)</label>
+              <input type="number" id="inputBaseBackoff" class="form-control" value="500" min="50" step="50">
+            </div>
+            <div class="form-group">
+              <label for="inputLeaseDuration">Lease Duration (ms)</label>
+              <input type="number" id="inputLeaseDuration" class="form-control" value="5000" min="1000" step="1000">
+            </div>
+          </div>
+
+          <div class="form-group">
+            <label for="inputPayload">Payload (JSON or text)</label>
+            <textarea id="inputPayload" class="form-control font-mono" rows="3">{"action":"send_invoice","recipient":"user@domain.com","amount":199.50}</textarea>
+          </div>
+
+          <div class="form-actions">
+            <button type="submit" class="btn btn-primary" id="btnSubmitJob">
+              <svg viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" stroke-width="2" fill="none"><polyline points="20 6 9 17 4 12"/></svg>
+              <span>Submit Schedulable Job</span>
+            </button>
+            <button type="button" class="btn btn-secondary" id="btnTestDuplicate">
+              <svg viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" stroke-width="2" fill="none"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+              <span>Test Idempotency Duplicate</span>
+            </button>
+          </div>
+        </form>
+
+        <!-- Feature Explainer Sidebar -->
+        <div class="dispatcher-sidebar glass-card">
+          <h3 class="sidebar-title">Scheduler Guarantees</h3>
+          <ul class="feature-checklist">
+            <li>
+              <div class="check-icon">&#10003;</div>
+              <div class="check-desc">
+                <strong>Sub-millisecond Atomic Leases:</strong> Distributed workers claim tasks via non-blocking lease locks with visibility deadlines.
+              </div>
+            </li>
+            <li>
+              <div class="check-icon">&#10003;</div>
+              <div class="check-desc">
+                <strong>Idempotency Deduplication:</strong> Exactly-once effect guarantee using hash-indexed deduplication tables.
+              </div>
+            </li>
+            <li>
+              <div class="check-icon">&#10003;</div>
+              <div class="check-desc">
+                <strong>Exponential Backoff + Jitter:</strong> Automatic retry sequencing protects downstream dependencies from thundering herds.
+              </div>
+            </li>
+            <li>
+              <div class="check-icon">&#10003;</div>
+              <div class="check-desc">
+                <strong>Crash Recovery Reaper:</strong> Missed worker heartbeats or expired leases are automatically reclaimed and re-queued.
+              </div>
+            </li>
+            <li>
+              <div class="check-icon">&#10003;</div>
+              <div class="check-desc">
+                <strong>Dead-Letter Queue (DLQ):</strong> Faulty jobs are isolated with full stack traces for human or automated replay.
+              </div>
+            </li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <!-- TAB 3: LIVE JOB STREAM -->
+    <section class="tab-content" id="tab-jobs">
+      <div class="section-toolbar">
+        <div class="toolbar-title-group">
+          <h2 class="section-title">Live Task Feed</h2>
+          <p class="section-desc">Streaming real-time task lifecycle transitions across all priority levels.</p>
+        </div>
+        <div class="table-filter-chips">
+          <button class="filter-chip active" data-filter="ALL">All Jobs</button>
+          <button class="filter-chip" data-filter="PENDING">Pending</button>
+          <button class="filter-chip" data-filter="LEASED">Leased</button>
+          <button class="filter-chip" data-filter="COMPLETED">Completed</button>
+          <button class="filter-chip" data-filter="RETRYING">Retrying</button>
+          <button class="filter-chip" data-filter="DEAD_LETTER">DLQ</button>
+        </div>
+      </div>
+
+      <div class="table-wrapper glass-card">
+        <table class="data-table" id="jobsTable">
+          <thead>
+            <tr>
+              <th>Job ID</th>
+              <th>Task Handler</th>
+              <th>Priority</th>
+              <th>Status</th>
+              <th>Worker</th>
+              <th>Retries</th>
+              <th>Schedule / Cron</th>
+              <th>Execution Time</th>
+              <th>Created</th>
+            </tr>
+          </thead>
+          <tbody id="jobsTableBody">
+            <tr>
+              <td colspan="9" class="empty-state">No jobs in queue. Dispatch a job or run benchmark!</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- TAB 4: DEAD-LETTER QUEUE -->
+    <section class="tab-content" id="tab-dlq">
+      <div class="section-toolbar">
+        <div class="toolbar-title-group">
+          <h2 class="section-title">Dead-Letter Queue (DLQ) Inspector</h2>
+          <p class="section-desc">Jobs that exhausted their maximum retry budget are quarantined here for auditing and manual or batch replay.</p>
+        </div>
+        <div class="toolbar-actions">
+          <button class="btn btn-secondary btn-sm" id="btnPurgeDLQ">
+            <svg viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" stroke-width="2" fill="none"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+            <span>Purge DLQ</span>
+          </button>
+        </div>
+      </div>
+
+      <div class="dlq-list-container" id="dlqContainer">
+        <div class="empty-state-card glass-card">
+          <svg viewBox="0 0 24 24" width="36" height="36" stroke="var(--emerald)" stroke-width="2" fill="none"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
+          <h3>Dead-Letter Queue is Empty</h3>
+          <p>All distributed jobs are succeeding or recovering gracefully. Submit a <code>fail_dlq</code> job to test quarantine routing.</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- TAB 5: 100K BENCHMARK & CHAOS SUITE -->
+    <section class="tab-content" id="tab-benchmarks">
+      <div class="section-toolbar">
+        <div class="toolbar-title-group">
+          <h2 class="section-title">Benchmark &amp; Chaos Reliability Suite</h2>
+          <p class="section-desc">Test distributed throughput at scale (up to 100,000 jobs) and verify failover crash recovery.</p>
+        </div>
+      </div>
+
+      <div class="benchmarks-grid">
+        <!-- 100K Scale Benchmark Card -->
+        <div class="bench-card glass-card">
+          <div class="bench-header">
+            <div class="bench-icon glow-cyan">
+              <svg viewBox="0 0 24 24" width="22" height="22" stroke="currentColor" stroke-width="2" fill="none"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+            </div>
+            <div>
+              <h3 class="bench-title">Throughput Benchmark (5K+ Jobs/Sec)</h3>
+              <p class="bench-subtitle">Floods the priority heap queue with concurrent tasks across the worker fleet.</p>
+            </div>
+          </div>
+
+          <div class="bench-controls">
+            <label class="control-label">Batch Size:</label>
+            <div class="batch-selector">
+              <button class="batch-btn" data-count="1000">1,000</button>
+              <button class="batch-btn active" data-count="10000">10,000</button>
+              <button class="batch-btn" data-count="50000">50,000</button>
+              <button class="batch-btn" data-count="100000">100,000</button>
+            </div>
+          </div>
+
+          <div class="bench-progress-box" id="benchProgressBox" style="display: none;">
+            <div class="progress-info">
+              <span id="benchStatusText">Executing benchmark...</span>
+              <span id="benchPercentageText">0%</span>
+            </div>
+            <div class="progress-bar-bg">
+              <div class="progress-bar-fill" id="benchProgressBar" style="width: 0%"></div>
+            </div>
+          </div>
+
+          <div class="bench-actions">
+            <button class="btn btn-primary btn-block" id="btnRunBenchmark">
+              <svg viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" stroke-width="2" fill="none"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+              <span>Launch Throughput Benchmark</span>
+            </button>
+          </div>
+
+          <div class="resume-metric-callout">
+            <span class="callout-badge">Resume Metric</span>
+            <p>&ldquo;Built a distributed task scheduler processing 5K jobs/sec with automatic retry, worker failover, and exactly-once job effects via idempotency keys.&rdquo;</p>
+          </div>
+        </div>
+
+        <!-- Chaos Monkey Card -->
+        <div class="bench-card glass-card">
+          <div class="bench-header">
+            <div class="bench-icon glow-rose">
+              <svg viewBox="0 0 24 24" width="22" height="22" stroke="currentColor" stroke-width="2" fill="none"><circle cx="12" cy="12" r="10"/><path d="m4.9 4.9 14.2 14.2"/><path d="M12 2a10 10 0 0 1 10 10"/></svg>
+            </div>
+            <div>
+              <h3 class="bench-title">Chaos Monkey: Crash &amp; Failover</h3>
+              <p class="bench-subtitle">Randomly terminates workers mid-lease to verify visibility expiration and reaper recovery.</p>
+            </div>
+          </div>
+
+          <div class="chaos-flow-steps">
+            <div class="flow-step">
+              <span class="step-num">1</span>
+              <span>Dispatches 200 jobs with 2.0s visibility lease deadlines.</span>
+            </div>
+            <div class="flow-step">
+              <span class="step-num">2</span>
+              <span>Mid-execution, abruptly terminates 50% of worker nodes.</span>
+            </div>
+            <div class="flow-step">
+              <span class="step-num">3</span>
+              <span>Coordinator reaper detects dead nodes, steals back orphaned leases.</span>
+            </div>
+            <div class="flow-step">
+              <span class="step-num">4</span>
+              <span>Revives workers and proves 100% completion with 0 job loss.</span>
+            </div>
+          </div>
+
+          <div class="chaos-result-box" id="chaosResultBox" style="display: none;">
+            <div class="chaos-result-status" id="chaosResultStatus">Chaos Running...</div>
+            <p id="chaosResultMessage">Observing crash recovery and lease reassignment...</p>
+          </div>
+
+          <div class="bench-actions">
+            <button class="btn btn-danger btn-block" id="btnRunChaosSuite">
+              <svg viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" stroke-width="2" fill="none"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+              <span>Execute Chaos Recovery Test</span>
+            </button>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <!-- Notification Toast Container -->
+  <div class="toast-container" id="toastContainer"></div>
+
+  <script src="app.js"></script>
+</body>
+</html>
